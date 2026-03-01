@@ -5,8 +5,9 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils/cn";
 
 const NAV_ITEMS = [
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/capture", label: "Capture" },
+  { href: "/fridge", label: "Fridge" },
+  { href: "/capture/add", label: "Add Items" },
+  { href: "/capture/remove", label: "Remove Items" },
 ];
 
 export function Header() {
@@ -16,7 +17,7 @@ export function Header() {
     <header className="sticky top-0 z-50 border-b border-zinc-200 bg-white/80 backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-950/80">
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
         <Link
-          href="/dashboard"
+          href="/fridge"
           className="text-lg font-bold text-emerald-600 dark:text-emerald-400"
         >
           TasteBuddy
