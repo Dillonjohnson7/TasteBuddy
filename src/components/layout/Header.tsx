@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils/cn";
 
 const NAV_ITEMS = [
   { href: "/fridge", label: "Fridge" },
+  { href: "/capture/smart", label: "Smart Scan" },
   { href: "/capture/add", label: "Add Items" },
   { href: "/capture/remove", label: "Remove Items" },
 ];
