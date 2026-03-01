@@ -40,3 +40,21 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Dataset & large files
+GroceryStoreDataset/
+archive.zip
+
+# Generated YOLO output
+project/yolo_dataset/
+project/yolov8n.pt
+project/runs/
+
+# Python environment
+grocery_env/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
