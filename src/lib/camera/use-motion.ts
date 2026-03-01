@@ -3,19 +3,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 
-const SUSTAINED_FRAMES = 2;
+const SUSTAINED_FRAMES = 3;
 const GESTURE_COOLDOWN_MS = 5000;
 const SCAN_DELAY_MS = 500;
 
 const CLIENT_POLL_MS = 100;
 const DIFF_CANVAS_WIDTH = 80;
-const PIXEL_DIFF_THRESHOLD = 25;
+const PIXEL_DIFF_THRESHOLD = 35;
 const CLIENT_BUFFER_SIZE = 4;
-const CLIENT_VELOCITY_THRESHOLD = 0.04;
-const CLIENT_DIRECTION_SCALE = 250;
-const SERVER_FRESHNESS_MS = 1000;
+const CLIENT_VELOCITY_THRESHOLD = 0.16;
+const CLIENT_DIRECTION_SCALE = 200;
+const MOTION_TIMEOUT_MS = 5000;
 
 export type LiveItem = { name: string; confidence: number; x: number };
+export type DetectionPhase = "detecting_object" | "detecting_motion";
 
 function computeHorizontalVelocity(
   current: Uint8ClampedArray,
@@ -52,13 +53,15 @@ export function useMotion(
   const [directionPct, setDirectionPct] = useState(0);
   const [isScanning, setIsScanning] = useState(false);
   const [liveItems, setLiveItems] = useState<LiveItem[]>([]);
+  const [phase, setPhase] = useState<DetectionPhase>("detecting_object");
 
   const sustainedCount = useRef<{ direction: "add" | "remove"; count: number } | null>(null);
   const cooldownUntilRef = useRef(0);
   const activeRef = useRef(false);
   const loopIdRef = useRef(0);
   const onGestureRef = useRef(onGesture);
-  const lastDetectedAtRef = useRef(0);
+  const phaseRef = useRef<DetectionPhase>("detecting_object");
+  const transitionedAtRef = useRef<number>(0);
 
   // Client loop refs
   const clientActiveRef = useRef(false);
@@ -71,6 +74,23 @@ export function useMotion(
   useEffect(() => {
     onGestureRef.current = onGesture;
   }, [onGesture]);
+
+  const enterDetectingObject = useCallback(() => {
+    phaseRef.current = "detecting_object";
+    setPhase("detecting_object");
+    setLiveItems([]);
+    sustainedCount.current = null;
+  }, []);
+
+  const enterDetectingMotion = useCallback((items: LiveItem[]) => {
+    phaseRef.current = "detecting_motion";
+    setPhase("detecting_motion");
+    setLiveItems(items);
+    transitionedAtRef.current = Date.now();
+    cooldownUntilRef.current = 0;
+    prevFrameDataRef.current = null;
+    clientVelocityBuffer.current = [];
+  }, []);
 
   const captureFrame = useCallback((): string | null => {
     const video = videoRef.current;
@@ -112,6 +132,8 @@ export function useMotion(
     if (!enabled) {
       activeRef.current = false;
       setLiveItems([]);
+      phaseRef.current = "detecting_object";
+      setPhase("detecting_object");
       return;
     }
 
@@ -120,6 +142,11 @@ export function useMotion(
 
     async function loop() {
       while (activeRef.current && loopIdRef.current === myId) {
+        if (phaseRef.current !== "detecting_object") {
+          await new Promise((r) => setTimeout(r, SCAN_DELAY_MS));
+          continue;
+        }
+
         const frame = captureFrame();
         if (!frame) {
           await new Promise((r) => setTimeout(r, SCAN_DELAY_MS));
@@ -150,10 +177,9 @@ export function useMotion(
             newLiveItems.push({ name: pred.name, confidence: pred.confidence, x: normalizedX });
           }
 
-          if (newLiveItems.length > 0) {
-            lastDetectedAtRef.current = Date.now();
+          if (newLiveItems.length > 0 && phaseRef.current === "detecting_object") {
+            enterDetectingMotion(newLiveItems);
           }
-          setLiveItems(newLiveItems);
         } catch {
           // Silent — keep looping
         } finally {
@@ -165,7 +191,7 @@ export function useMotion(
     }
 
     void loop();
-  }, [enabled, captureFrame]);
+  }, [enabled, captureFrame, enterDetectingMotion]);
 
   // Client loop: measure motion direction at 10fps
   useEffect(() => {
@@ -185,6 +211,19 @@ export function useMotion(
 
     async function clientLoop() {
       while (clientActiveRef.current && clientLoopIdRef.current === myId) {
+        if (phaseRef.current !== "detecting_motion") {
+          await new Promise((r) => setTimeout(r, CLIENT_POLL_MS));
+          continue;
+        }
+
+        // Timeout: revert if no gesture within MOTION_TIMEOUT_MS
+        if (Date.now() - transitionedAtRef.current > MOTION_TIMEOUT_MS) {
+          enterDetectingObject();
+          setDirectionPct(0);
+          await new Promise((r) => setTimeout(r, CLIENT_POLL_MS));
+          continue;
+        }
+
         const currentData = capturePixelData();
 
         if (currentData && prevFrameDataRef.current) {
@@ -201,9 +240,8 @@ export function useMotion(
             setDirectionPct(pct);
 
             const now = Date.now();
-            const serverFresh = now - lastDetectedAtRef.current < SERVER_FRESHNESS_MS;
 
-            if (serverFresh && now >= cooldownUntilRef.current && Math.abs(smoothed) > CLIENT_VELOCITY_THRESHOLD) {
+            if (now >= cooldownUntilRef.current && Math.abs(smoothed) > CLIENT_VELOCITY_THRESHOLD) {
               const dir: "add" | "remove" = smoothed > 0 ? "add" : "remove";
               if (sustainedCount.current?.direction === dir) {
                 sustainedCount.current.count++;
@@ -216,14 +254,30 @@ export function useMotion(
                 clientVelocityBuffer.current = [];
                 prevFrameDataRef.current = null;
                 onGestureRef.current(dir);
+                enterDetectingObject();
+                setDirectionPct(0);
               }
             } else {
               sustainedCount.current = null;
             }
           } else {
-            clientVelocityBuffer.current = [];
-            sustainedCount.current = null;
-            setDirectionPct(0);
+            // Motion disappeared — item may have exited the frame mid-swipe.
+            // If we already counted enough sustained frames, treat the drop-out as completion.
+            const partial = sustainedCount.current;
+            if (partial && partial.count >= 1 && Date.now() >= cooldownUntilRef.current) {
+              const now = Date.now();
+              cooldownUntilRef.current = now + GESTURE_COOLDOWN_MS;
+              sustainedCount.current = null;
+              clientVelocityBuffer.current = [];
+              prevFrameDataRef.current = null;
+              onGestureRef.current(partial.direction);
+              enterDetectingObject();
+              setDirectionPct(0);
+            } else {
+              clientVelocityBuffer.current = [];
+              sustainedCount.current = null;
+              setDirectionPct(0);
+            }
           }
         }
 
@@ -233,7 +287,7 @@ export function useMotion(
     }
 
     void clientLoop();
-  }, [enabled, capturePixelData]);
+  }, [enabled, capturePixelData, enterDetectingObject]);
 
-  return { directionPct, isScanning, liveItems };
+  return { directionPct, isScanning, liveItems, phase };
 }

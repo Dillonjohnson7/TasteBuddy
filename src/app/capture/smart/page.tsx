@@ -30,6 +30,7 @@ export default function SmartCapturePage() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const monitoringRef = useRef(false);
   const isScanningRef = useRef(false);
+  const [justLocked, setJustLocked] = useState(false);
 
   useEffect(() => {
     const stored = localStorage.getItem(SESSION_KEY);
@@ -138,11 +139,19 @@ export default function SmartCapturePage() {
     [state, runScan]
   );
 
-  const { directionPct, isScanning, liveItems } = useMotion(
+  const { directionPct, isScanning, liveItems, phase } = useMotion(
     videoRef,
     state === "MONITORING",
     handleGesture
   );
+
+  // Trigger ping animation when first locking on
+  useEffect(() => {
+    if (phase !== "detecting_motion") return;
+    setJustLocked(true);
+    const t = setTimeout(() => setJustLocked(false), 700);
+    return () => clearTimeout(t);
+  }, [phase]);
 
   async function handleStart() {
     await start();
@@ -170,9 +179,12 @@ export default function SmartCapturePage() {
     );
   }
 
+  const monitoringLabel =
+    phase === "detecting_object" ? "Looking for items…" : "Swipe to add → or ← remove";
+
   const stateLabel: Record<CaptureState, string> = {
     IDLE: "Camera off",
-    MONITORING: "Watching for motion…",
+    MONITORING: monitoringLabel,
     CAPTURING: "Capturing frames…",
     UPLOADING: "Analyzing…",
     DONE: lastResult ?? "Scan complete",
@@ -181,7 +193,7 @@ export default function SmartCapturePage() {
 
   const stateColor: Record<CaptureState, string> = {
     IDLE: "bg-zinc-500",
-    MONITORING: "bg-blue-500",
+    MONITORING: phase === "detecting_object" ? "bg-blue-500" : "bg-emerald-500",
     CAPTURING: "bg-blue-400",
     UPLOADING: "bg-blue-400",
     DONE: lastDirection === "add" ? "bg-emerald-500" : "bg-orange-500",
@@ -191,7 +203,7 @@ export default function SmartCapturePage() {
   const showItems =
     detectedItems.length > 0 && (state === "UPLOADING" || state === "DONE");
 
-  const showMeter = state === "MONITORING" && liveItems.length > 0;
+  const showMeter = state === "MONITORING" && phase === "detecting_motion";
   const meterPulsing = Math.abs(directionPct) > 50;
 
   return (
@@ -216,23 +228,38 @@ export default function SmartCapturePage() {
         {/* Status overlay */}
         <div className="absolute left-4 top-14 flex flex-col gap-2">
           <div className="flex items-center gap-2 rounded-lg bg-black/60 px-3 py-2 backdrop-blur-sm">
-            <div
-              className={cn(
-                "h-2.5 w-2.5 rounded-full",
-                stateColor[state],
-                (state === "MONITORING" || state === "UPLOADING") && "animate-pulse"
+            <div className="relative flex h-2.5 w-2.5 items-center justify-center">
+              {/* Ping ring on lock-on */}
+              {justLocked && (
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
               )}
-            />
+              <div
+                className={cn(
+                  "relative h-2.5 w-2.5 rounded-full",
+                  stateColor[state],
+                  // Pulse only when searching; locked = steady
+                  ((state === "MONITORING" && phase === "detecting_object") || state === "UPLOADING") && "animate-pulse"
+                )}
+              />
+            </div>
             <span className="text-sm font-medium text-white">{stateLabel[state]}</span>
           </div>
 
-          {state === "MONITORING" && isScanning && (
+          {/* Scanning badge — only in detecting_object */}
+          {state === "MONITORING" && phase === "detecting_object" && isScanning && (
             <div className="rounded-lg bg-black/60 px-3 py-2 backdrop-blur-sm">
               <span className="text-xs text-blue-300">Scanning…</span>
             </div>
           )}
 
-          {state === "MONITORING" && liveItems.length > 0 && (
+          {/* Locked-on indicator — only in detecting_motion */}
+          {state === "MONITORING" && phase === "detecting_motion" && (
+            <div className="rounded-lg bg-emerald-900/60 border border-emerald-500/50 px-3 py-2 backdrop-blur-sm">
+              <span className="text-xs font-semibold text-emerald-300">Locked on — swipe item</span>
+            </div>
+          )}
+
+          {state === "MONITORING" && phase === "detecting_motion" && liveItems.length > 0 && (
             <div className="rounded-lg bg-black/60 px-3 py-2 backdrop-blur-sm">
               <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-400">
                 Detected
@@ -241,7 +268,7 @@ export default function SmartCapturePage() {
                 {liveItems.map((item) => (
                   <span
                     key={item.name}
-                    className="rounded-full bg-blue-700/80 px-2 py-0.5 text-xs font-medium text-blue-100"
+                    className="rounded-full bg-emerald-700/80 px-2 py-0.5 text-xs font-medium text-emerald-100"
                   >
                     {item.name} ({Math.round(item.confidence * 100)}%)
                   </span>
