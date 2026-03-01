@@ -17,7 +17,7 @@ from pathlib import Path
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 REPO_ROOT    = Path(__file__).resolve().parent.parent
-DATASET_ROOT = REPO_ROOT / "GroceryStoreDataset" / "dataset"
+DATASET_ROOT = REPO_ROOT / "model" / "GroceryStoreDataset" / "dataset"
 OUT_ROOT     = Path(__file__).resolve().parent / "yolo_dataset"
 DATA_YAML    = Path(__file__).resolve().parent / "data.yaml"
 

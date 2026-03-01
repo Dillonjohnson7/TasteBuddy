@@ -8,6 +8,7 @@ export type FridgeItem = {
   first_seen: string;
   last_seen: string;
   image_url: string | null;
+  session_id: string | null;
 };
 
 export type ScanLogEntry = {
@@ -16,6 +17,14 @@ export type ScanLogEntry = {
   frame_count: number;
   items_detected: number;
   raw_response: unknown;
+  session_id: string | null;
+};
+
+export type Session = {
+  id: string;
+  code: string;
+  created_at: string;
+  expires_at: string;
 };
 
 export type Database = {
@@ -31,6 +40,12 @@ export type Database = {
         Row: ScanLogEntry;
         Insert: Partial<ScanLogEntry>;
         Update: Partial<ScanLogEntry>;
+        Relationships: [];
+      };
+      sessions: {
+        Row: Session;
+        Insert: Partial<Session> & { code: string };
+        Update: Partial<Session>;
         Relationships: [];
       };
     };
