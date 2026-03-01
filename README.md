@@ -1,36 +1,138 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# TasteBuddy
 
-## Getting Started
+TasteBuddy is a fridge inventory app that uses a locally-trained YOLOv8 model to detect grocery items from your webcam. Detected items are stored in a Supabase database and displayed on a live dashboard, giving you an instant view of what's in your fridge.
 
-First, run the development server:
+## Architecture
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+```
+Webcam capture → /api/scan → local YOLO server (port 8000) → Supabase DB → Dashboard
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Prerequisites
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- Node.js 20+ and npm
+- Python 3.10+
+- ~4 GB disk space for model weights and dataset
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Environment Setup
 
-## Learn More
+Create a `.env.local` file in the repo root with the following variables:
 
-To learn more about Next.js, take a look at the following resources:
+```
+NEXT_PUBLIC_SUPABASE_URL=your_supabase_project_url
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+USE_LOCAL_MODEL=true
+LOCAL_MODEL_URL=http://localhost:8000
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+`USE_LOCAL_MODEL` and `LOCAL_MODEL_URL` are already set to the correct defaults — you only need to fill in the Supabase values.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## One-Time: Dataset + Training
 
-## Deploy on Vercel
+### 1. Obtain the dataset
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Download the [GroceryStoreDataset](https://github.com/marcusklasson/GroceryStoreDataset) and place it **one level above the repo root**, so the path looks like:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```
+../GroceryStoreDataset/dataset/
+TasteBuddy/              ← repo root
+```
+
+`convert_dataset.py` expects the dataset at `../GroceryStoreDataset/dataset/` relative to the repo root.
+
+### 2. Create a Python virtual environment
+
+```bash
+cd model
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+### 3. Install Python dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Convert the dataset
+
+```bash
+python convert_dataset.py
+```
+
+This converts the dataset to YOLO format and rewrites `data.yaml` with the correct absolute path. Do **not** edit `data.yaml` manually after this step.
+
+### 5. Train the model
+
+```bash
+python train.py
+```
+
+Training takes approximately 10 minutes on an MPS/CUDA GPU, or 60–90 minutes on CPU.
+
+> **Apple Silicon note:** `train.py` auto-detects CUDA but not MPS. To use your GPU, open `train.py` and change the `device` variable:
+> ```python
+> # Before
+> device = "0" if torch.cuda.is_available() else "cpu"
+> # After
+> device = "mps"
+> ```
+> If you skip this, training will fall back to CPU automatically.
+
+### 6. Verify weights were saved
+
+```bash
+ls runs/detect/grocery/weights/best.pt
+```
+
+You should see `best.pt` listed. This is the file the inference server loads at startup.
+
+## Running the App
+
+You need two terminals running simultaneously.
+
+**Terminal 1 — Python inference server:**
+
+```bash
+cd model && source .venv/bin/activate
+uvicorn server:app --host 127.0.0.1 --port 8000 --reload
+```
+
+Expected startup output: `[server] Model loaded on MPS/CUDA/CPU`
+
+**Terminal 2 — Next.js app:**
+
+```bash
+npm install   # first time only
+npm run dev
+```
+
+Open http://localhost:3000
+
+## Verifying Everything Works
+
+Check the inference server is healthy:
+
+```bash
+curl http://localhost:8000/health
+# Expected: {"status":"ok","model_loaded":true}
+```
+
+Then open http://localhost:3000/capture, click **Scan**, and check the dashboard for detected items.
+
+## Configuration Reference
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `USE_LOCAL_MODEL` | `true` | Set to `false` to fall back to Roboflow/mock |
+| `LOCAL_MODEL_URL` | `http://localhost:8000` | URL of the Python inference server |
+| `NEXT_PUBLIC_SUPABASE_URL` | — | Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | — | Supabase anon key |
+
+## Model Details
+
+- **Architecture:** YOLOv8n
+- **Dataset:** Grocery Store Dataset — 81 grocery classes
+- **Class mapping:** Raw class names (e.g. `Arla-Standard-Milk`) are mapped to canonical names (e.g. `milk`) automatically
+- **Confidence threshold:** 0.4
+- **Weights location:** `model/runs/detect/grocery/weights/best.pt`
