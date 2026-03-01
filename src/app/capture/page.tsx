@@ -7,6 +7,7 @@ import { useWakeLock } from "@/lib/camera/use-wake-lock";
 import { extractFrames } from "@/lib/camera/frame-extractor";
 import { Button } from "@/components/ui/Button";
 import { cn } from "@/lib/utils/cn";
+import type { DetectedItem } from "@/lib/roboflow/types";
 
 type CaptureState =
   | "IDLE"
@@ -23,6 +24,7 @@ export default function CapturePage() {
   const [state, setState] = useState<CaptureState>("IDLE");
   const [lastResult, setLastResult] = useState<string | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
+  const [detectedItems, setDetectedItems] = useState<DetectedItem[]>([]);
   const monitoringRef = useRef(false);
 
   const runScan = useCallback(async () => {
@@ -31,6 +33,7 @@ export default function CapturePage() {
 
     setState("CAPTURING");
     setScanError(null);
+    setDetectedItems([]);
 
     try {
       const frames = await extractFrames(video, 3);
@@ -44,15 +47,45 @@ export default function CapturePage() {
       });
 
       if (!res.ok) throw new Error(`Scan failed: ${res.status}`);
+      if (!res.body) throw new Error("No response body");
 
-      const data = await res.json();
-      setLastResult(`Detected ${data.items?.length ?? 0} items`);
-      setState("DONE");
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
 
-      // Return to monitoring after 3s
-      setTimeout(() => {
-        if (monitoringRef.current) setState("MONITORING");
-      }, 3000);
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const msg = JSON.parse(line);
+
+          if (msg.type === "frame") {
+            setDetectedItems((prev) => {
+              const merged = new Map(prev.map((i) => [i.name, i]));
+              for (const item of msg.items as DetectedItem[]) {
+                merged.set(item.name, item);
+              }
+              return Array.from(merged.values());
+            });
+          } else if (msg.type === "complete") {
+            setDetectedItems(msg.items as DetectedItem[]);
+            setLastResult(`Detected ${(msg.items as DetectedItem[]).length} items`);
+            setState("DONE");
+
+            setTimeout(() => {
+              if (monitoringRef.current) setState("MONITORING");
+            }, 3000);
+          } else if (msg.type === "error") {
+            throw new Error(msg.message);
+          }
+        }
+      }
     } catch (err) {
       setScanError(err instanceof Error ? err.message : "Scan failed");
       setState("ERROR");
@@ -65,7 +98,6 @@ export default function CapturePage() {
 
   const handleBrightnessTrigger = useCallback(() => {
     setState("TRIGGERED");
-    // Short delay then scan
     setTimeout(() => runScan(), 200);
   }, [runScan]);
 
@@ -89,6 +121,7 @@ export default function CapturePage() {
     setState("IDLE");
     setLastResult(null);
     setScanError(null);
+    setDetectedItems([]);
   }
 
   const stateLabel: Record<CaptureState, string> = {
@@ -110,6 +143,8 @@ export default function CapturePage() {
     DONE: "bg-emerald-500",
     ERROR: "bg-red-500",
   };
+
+  const showItems = detectedItems.length > 0 && state !== "IDLE";
 
   return (
     <main className="flex min-h-[calc(100vh-3.5rem)] flex-col bg-black">
@@ -165,6 +200,25 @@ export default function CapturePage() {
             </div>
           )}
         </div>
+
+        {/* Detected items overlay */}
+        {showItems && (
+          <div className="absolute bottom-4 left-4 max-h-48 w-56 overflow-y-auto rounded-lg bg-black/70 p-3 backdrop-blur-sm">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-400">
+              Detected
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {detectedItems.map((item) => (
+                <span
+                  key={item.name}
+                  className="rounded-full bg-emerald-700/80 px-2.5 py-0.5 text-xs font-medium text-emerald-100"
+                >
+                  {item.name} ({Math.round(item.confidence * 100)}%)
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Camera error */}
         {camError && (
