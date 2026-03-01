@@ -31,6 +31,7 @@ export default function SmartCapturePage() {
   const monitoringRef = useRef(false);
   const isScanningRef = useRef(false);
   const [justLocked, setJustLocked] = useState(false);
+  const lockedFramesRef = useRef<string[] | null>(null);
 
   useEffect(() => {
     const stored = localStorage.getItem(SESSION_KEY);
@@ -60,7 +61,7 @@ export default function SmartCapturePage() {
       setDetectedItems([]);
 
       try {
-        const frames = await extractFrames(video, 3);
+        const frames = lockedFramesRef.current ?? (await extractFrames(video, 3));
         setState("UPLOADING");
 
         const endpoint = direction === "add" ? "/api/scan/add" : "/api/scan/remove";
@@ -152,6 +153,19 @@ export default function SmartCapturePage() {
     const t = setTimeout(() => setJustLocked(false), 700);
     return () => clearTimeout(t);
   }, [phase]);
+
+  // Capture frames at lock-in time so runScan uses the correct item
+  useEffect(() => {
+    if (phase === "detecting_motion") {
+      if (videoRef.current) {
+        extractFrames(videoRef.current, 3).then((frames) => {
+          lockedFramesRef.current = frames;
+        });
+      }
+    } else {
+      lockedFramesRef.current = null;
+    }
+  }, [phase, videoRef]);
 
   async function handleStart() {
     await start();
