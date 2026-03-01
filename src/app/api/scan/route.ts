@@ -1,67 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
-import { detectItems as detectRoboflow } from "@/lib/roboflow/client";
-import { detectItems as detectLocal } from "@/lib/local-model/client";
+import { detectItems } from "@/lib/roboflow/client";
 import type { RoboflowPrediction, DetectedItem } from "@/lib/roboflow/types";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import type { Database } from "@/lib/supabase/types";
 
-const detectItems =
-  process.env.USE_LOCAL_MODEL === "true" ? detectLocal : detectRoboflow;
-
 const CONFIDENCE_THRESHOLD = 0.4;
 
 const CATEGORY_MAP: Record<string, string> = {
-  // Dairy
   milk: "dairy",
   cheese: "dairy",
   butter: "dairy",
   yogurt: "dairy",
   eggs: "dairy",
-  "sour cream": "dairy",
-  // Produce
   lettuce: "produce",
   apple: "produce",
   tomato: "produce",
   carrot: "produce",
-  orange: "produce",
-  banana: "produce",
-  lemon: "produce",
-  lime: "produce",
-  mango: "produce",
-  melon: "produce",
-  watermelon: "produce",
-  pear: "produce",
-  pineapple: "produce",
-  plum: "produce",
-  grapefruit: "produce",
-  avocado: "produce",
-  peach: "produce",
-  kiwi: "produce",
-  papaya: "produce",
-  "passion fruit": "produce",
-  pomegranate: "produce",
-  asparagus: "produce",
-  aubergine: "produce",
-  cabbage: "produce",
-  cucumber: "produce",
-  garlic: "produce",
-  ginger: "produce",
-  leek: "produce",
-  mushroom: "produce",
-  onion: "produce",
-  potato: "produce",
-  "sweet potato": "produce",
-  "bell pepper": "produce",
-  beet: "produce",
-  zucchini: "produce",
-  // Beverages
   "orange juice": "beverage",
-  "apple juice": "beverage",
-  "grapefruit juice": "beverage",
   soda: "beverage",
   beer: "beverage",
-  // Condiments / other
   ketchup: "condiment",
   "leftover pizza": "leftover",
   "chicken breast": "meat",
@@ -106,6 +64,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const frames: string[] = body.frames;
+    const sessionId: string | undefined = body.session_id;
 
     if (!frames || !Array.isArray(frames) || frames.length === 0) {
       return NextResponse.json(
@@ -114,16 +73,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Run detection on all frames concurrently
-    const responses = await Promise.all(
-      frames.map((frame) => detectItems(frame))
-    );
-
-    // Collect all predictions
-    const allPredictions = responses.flatMap((r) => r.predictions);
-
-    // Aggregate and deduplicate
-    const detectedItems = aggregatePredictions(allPredictions);
+    if (!sessionId) {
+      return NextResponse.json(
+        { error: "session_id is required" },
+        { status: 400 }
+      );
+    }
 
     // Set up Supabase client
     const cookieStore = await cookies();
@@ -148,21 +103,55 @@ export async function POST(request: NextRequest) {
       }
     );
 
+    // Validate session exists and isn't expired
+    const { data: session } = await supabase
+      .from("sessions")
+      .select("id, expires_at")
+      .eq("id", sessionId)
+      .single();
+
+    if (!session) {
+      return NextResponse.json(
+        { error: "Invalid session" },
+        { status: 404 }
+      );
+    }
+
+    if (new Date(session.expires_at) < new Date()) {
+      return NextResponse.json(
+        { error: "Session expired" },
+        { status: 410 }
+      );
+    }
+
+    // Run detection on all frames concurrently
+    const responses = await Promise.all(
+      frames.map((frame) => detectItems(frame))
+    );
+
+    // Collect all predictions
+    const allPredictions = responses.flatMap((r) => r.predictions);
+
+    // Aggregate and deduplicate
+    const detectedItems = aggregatePredictions(allPredictions);
+
     const now = new Date().toISOString();
 
-    // Mark all current items as not present first
+    // Mark all current items as not present — only for this session
     await supabase
       .from("fridge_items")
       .update({ is_present: false })
-      .eq("is_present", true);
+      .eq("is_present", true)
+      .eq("session_id", sessionId);
 
     // Upsert detected items — use select+update/insert pattern
-    // since the unique index is on lower(name)
+    // since the unique index is on lower(name) + session_id
     for (const item of detectedItems) {
       const { data: existing } = await supabase
         .from("fridge_items")
         .select("id")
         .ilike("name", item.name)
+        .eq("session_id", sessionId)
         .maybeSingle();
 
       if (existing) {
@@ -184,15 +173,17 @@ export async function POST(request: NextRequest) {
           confidence: item.confidence,
           is_present: true,
           last_seen: now,
+          session_id: sessionId,
         });
       }
     }
 
-    // Log the scan
+    // Log the scan with session_id
     await supabase.from("scan_log").insert({
       frame_count: frames.length,
       items_detected: detectedItems.length,
       raw_response: { predictions: allPredictions, items: detectedItems },
+      session_id: sessionId,
     });
 
     return NextResponse.json({

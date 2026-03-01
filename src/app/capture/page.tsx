@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useCamera } from "@/lib/camera/use-camera";
 import { useBrightness } from "@/lib/camera/use-brightness";
 import { useWakeLock } from "@/lib/camera/use-wake-lock";
@@ -17,17 +18,47 @@ type CaptureState =
   | "DONE"
   | "ERROR";
 
+const SESSION_KEY = "tastebuddy_session_id";
+
 export default function CapturePage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="flex min-h-[calc(100vh-3.5rem)] items-center justify-center bg-black">
+          <p className="text-sm text-zinc-500">Loading...</p>
+        </main>
+      }
+    >
+      <CaptureInner />
+    </Suspense>
+  );
+}
+
+function CaptureInner() {
+  const searchParams = useSearchParams();
   const { videoRef, status: camStatus, error: camError, start, stop } = useCamera();
   const wakeLock = useWakeLock();
   const [state, setState] = useState<CaptureState>("IDLE");
   const [lastResult, setLastResult] = useState<string | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const monitoringRef = useRef(false);
+
+  // Read session from URL or localStorage
+  useEffect(() => {
+    const urlSession = searchParams.get("s");
+    if (urlSession) {
+      setSessionId(urlSession);
+      localStorage.setItem(SESSION_KEY, urlSession);
+    } else {
+      const stored = localStorage.getItem(SESSION_KEY);
+      if (stored) setSessionId(stored);
+    }
+  }, [searchParams]);
 
   const runScan = useCallback(async () => {
     const video = videoRef.current;
-    if (!video) return;
+    if (!video || !sessionId) return;
 
     setState("CAPTURING");
     setScanError(null);
@@ -40,7 +71,7 @@ export default function CapturePage() {
       const res = await fetch("/api/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ frames }),
+        body: JSON.stringify({ frames, session_id: sessionId }),
       });
 
       if (!res.ok) throw new Error(`Scan failed: ${res.status}`);
@@ -61,7 +92,7 @@ export default function CapturePage() {
         if (monitoringRef.current) setState("MONITORING");
       }, 5000);
     }
-  }, [videoRef]);
+  }, [videoRef, sessionId]);
 
   const handleBrightnessTrigger = useCallback(() => {
     setState("TRIGGERED");
@@ -89,6 +120,20 @@ export default function CapturePage() {
     setState("IDLE");
     setLastResult(null);
     setScanError(null);
+  }
+
+  // No session — show pairing prompt
+  if (!sessionId) {
+    return (
+      <main className="flex min-h-[calc(100vh-3.5rem)] flex-col items-center justify-center bg-black px-6">
+        <div className="max-w-sm rounded-xl bg-zinc-900 p-8 text-center">
+          <h1 className="text-lg font-semibold text-white">No session linked</h1>
+          <p className="mt-2 text-sm text-zinc-400">
+            Scan the QR code on your dashboard to get started.
+          </p>
+        </div>
+      </main>
+    );
   }
 
   const stateLabel: Record<CaptureState, string> = {
@@ -182,36 +227,35 @@ export default function CapturePage() {
       </div>
 
       {/* Controls */}
-      <div className="flex items-center justify-between gap-4 border-t border-zinc-800 bg-zinc-950 p-4">
-        {state === "IDLE" ? (
+      {state === "IDLE" ? (
+        <div className="absolute inset-0 flex items-center justify-center">
           <Button
             onClick={handleStart}
             size="lg"
-            className="w-full"
             disabled={camStatus === "requesting"}
           >
             {camStatus === "requesting" ? "Starting camera..." : "Start Monitoring"}
           </Button>
-        ) : (
-          <>
-            <Button variant="secondary" onClick={handleStop}>
-              Stop
-            </Button>
-            <Button
-              onClick={() => runScan()}
-              disabled={
-                state === "CAPTURING" || state === "UPLOADING"
-              }
-              size="lg"
-              className="flex-1"
-            >
-              {state === "CAPTURING" || state === "UPLOADING"
-                ? "Scanning..."
-                : "Manual Scan"}
-            </Button>
-          </>
-        )}
-      </div>
+        </div>
+      ) : (
+        <div className="flex items-center justify-center gap-4 border-t border-zinc-800 bg-zinc-950 p-4">
+          <Button variant="secondary" onClick={handleStop}>
+            Stop
+          </Button>
+          <Button
+            onClick={() => runScan()}
+            disabled={
+              state === "CAPTURING" || state === "UPLOADING"
+            }
+            size="lg"
+            className="flex-1"
+          >
+            {state === "CAPTURING" || state === "UPLOADING"
+              ? "Scanning..."
+              : "Manual Scan"}
+          </Button>
+        </div>
+      )}
     </main>
   );
 }
