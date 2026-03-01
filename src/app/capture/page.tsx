@@ -1,7 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useCamera } from "@/lib/camera/use-camera";
 import { useBrightness } from "@/lib/camera/use-brightness";
 import { useWakeLock } from "@/lib/camera/use-wake-lock";
@@ -22,45 +21,41 @@ type CaptureState =
 const SESSION_KEY = "tastebuddy_session_id";
 
 export default function CapturePage() {
-  return (
-    <Suspense
-      fallback={
-        <main className="flex min-h-[calc(100vh-3.5rem)] items-center justify-center bg-black">
-          <p className="text-sm text-zinc-500">Loading...</p>
-        </main>
-      }
-    >
-      <CaptureInner />
-    </Suspense>
-  );
-}
-
-function CaptureInner() {
-  const searchParams = useSearchParams();
   const { videoRef, status: camStatus, error: camError, start, stop } = useCamera();
   const wakeLock = useWakeLock();
   const [state, setState] = useState<CaptureState>("IDLE");
   const [lastResult, setLastResult] = useState<string | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
   const [detectedItems, setDetectedItems] = useState<DetectedItem[]>([]);
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const monitoringRef = useRef(false);
+  const isScanningRef = useRef(false);
+  const periodicScanRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const runScanRef = useRef<() => void>(() => {});
 
-  // Read session from URL or localStorage
   useEffect(() => {
-    const urlSession = searchParams.get("s");
-    if (urlSession) {
-      setSessionId(urlSession);
-      localStorage.setItem(SESSION_KEY, urlSession);
-    } else {
-      const stored = localStorage.getItem(SESSION_KEY);
-      if (stored) setSessionId(stored);
+    const stored = localStorage.getItem(SESSION_KEY);
+    if (stored) {
+      setSessionId(stored);
+      return;
     }
-  }, [searchParams]);
+    fetch("/api/sessions/create", { method: "POST" })
+      .then((r) => r.json())
+      .then(({ id }: { id: string }) => {
+        localStorage.setItem(SESSION_KEY, id);
+        setSessionId(id);
+      })
+      .catch(() => {
+        /* leave sessionId null; error state will show */
+      });
+  }, []);
 
   const runScan = useCallback(async () => {
     const video = videoRef.current;
     if (!video || !sessionId) return;
+    if (isScanningRef.current) return;
 
+    isScanningRef.current = true;
     setState("CAPTURING");
     setScanError(null);
     setDetectedItems([]);
@@ -123,8 +118,15 @@ function CaptureInner() {
       setTimeout(() => {
         if (monitoringRef.current) setState("MONITORING");
       }, 5000);
+    } finally {
+      isScanningRef.current = false;
     }
   }, [videoRef, sessionId]);
+
+  // Keep a stable ref so the periodic interval always calls the latest runScan
+  useEffect(() => {
+    runScanRef.current = runScan;
+  }, [runScan]);
 
   const handleBrightnessTrigger = useCallback(() => {
     setState("TRIGGERED");
@@ -142,10 +144,20 @@ function CaptureInner() {
     await wakeLock.request();
     monitoringRef.current = true;
     setState("MONITORING");
+
+    periodicScanRef.current = setInterval(() => {
+      if (monitoringRef.current && !isScanningRef.current) {
+        runScanRef.current();
+      }
+    }, 20000);
   }
 
   function handleStop() {
     monitoringRef.current = false;
+    if (periodicScanRef.current) {
+      clearInterval(periodicScanRef.current);
+      periodicScanRef.current = null;
+    }
     stop();
     wakeLock.release();
     setState("IDLE");
@@ -154,16 +166,10 @@ function CaptureInner() {
     setDetectedItems([]);
   }
 
-  // No session — show pairing prompt
   if (!sessionId) {
     return (
-      <main className="flex min-h-[calc(100vh-3.5rem)] flex-col items-center justify-center bg-black px-6">
-        <div className="max-w-sm rounded-xl bg-zinc-900 p-8 text-center">
-          <h1 className="text-lg font-semibold text-white">No session linked</h1>
-          <p className="mt-2 text-sm text-zinc-400">
-            Scan the QR code on your dashboard to get started.
-          </p>
-        </div>
+      <main className="flex min-h-[calc(100vh-3.5rem)] items-center justify-center bg-black">
+        <p className="text-sm text-zinc-500">Starting session…</p>
       </main>
     );
   }
@@ -240,7 +246,7 @@ function CaptureInner() {
 
           {triggered && (
             <div className="animate-pulse rounded-lg bg-yellow-500/20 px-3 py-2 text-sm font-medium text-yellow-300 backdrop-blur-sm">
-              Light detected — scanning!
+              Brightness change detected — scanning!
             </div>
           )}
         </div>

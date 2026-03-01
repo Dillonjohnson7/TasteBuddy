@@ -4,8 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 const SAMPLE_WIDTH = 64;
 const SAMPLE_HEIGHT = 48;
-const BRIGHTNESS_THRESHOLD = 80; // out of 255
-const SUSTAIN_MS = 500;
+const DELTA_THRESHOLD = 40; // out of 255 — ~16% swing counts as drastic
 const COOLDOWN_MS = 30000;
 
 export function useBrightness(
@@ -17,7 +16,7 @@ export function useBrightness(
   const [triggered, setTriggered] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
-  const brightSinceRef = useRef<number | null>(null);
+  const prevLumRef = useRef<number | null>(null);
   const cooldownUntilRef = useRef(0);
 
   const sampleLuminance = useCallback(() => {
@@ -51,31 +50,29 @@ export function useBrightness(
   }, [videoRef]);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) {
+      prevLumRef.current = null;
+      return;
+    }
 
     const interval = setInterval(() => {
       const lum = sampleLuminance();
       setLuminance(Math.round(lum));
 
       const now = Date.now();
-      if (now < cooldownUntilRef.current) {
-        brightSinceRef.current = null;
-        return;
-      }
+      const prev = prevLumRef.current;
+      prevLumRef.current = lum;
 
-      if (lum >= BRIGHTNESS_THRESHOLD) {
-        if (!brightSinceRef.current) {
-          brightSinceRef.current = now;
-        } else if (now - brightSinceRef.current >= SUSTAIN_MS) {
-          setTriggered(true);
-          onTrigger();
-          brightSinceRef.current = null;
-          cooldownUntilRef.current = now + COOLDOWN_MS;
+      if (prev === null) return; // need at least one prior sample to diff
 
-          setTimeout(() => setTriggered(false), 2000);
-        }
-      } else {
-        brightSinceRef.current = null;
+      if (now < cooldownUntilRef.current) return;
+
+      const delta = Math.abs(lum - prev);
+      if (delta >= DELTA_THRESHOLD) {
+        setTriggered(true);
+        onTrigger();
+        cooldownUntilRef.current = now + COOLDOWN_MS;
+        setTimeout(() => setTriggered(false), 2000);
       }
     }, 1000);
 

@@ -1,5 +1,4 @@
 import { NextRequest } from "next/server";
-import { detectItems as detectRoboflow } from "@/lib/roboflow/client";
 import { detectItems as detectLocal } from "@/lib/local-model/client";
 import type { RoboflowPrediction, DetectedItem } from "@/lib/roboflow/types";
 import { createServerClient } from "@supabase/ssr";
@@ -84,7 +83,7 @@ export async function POST(request: NextRequest) {
 
       try {
         for (let i = 0; i < frames.length; i++) {
-          const response = await detectItems(frames[i]);
+          const response = await detectLocal(frames[i]);
           const framePredictions = response.predictions;
           allPredictions.push(...framePredictions);
 
