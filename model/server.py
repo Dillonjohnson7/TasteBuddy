@@ -12,6 +12,7 @@ import base64
 import io
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 
 import torch
 from fastapi import FastAPI, HTTPException
@@ -118,23 +119,24 @@ CLASS_CANONICAL_MAP: dict[str, str] = {
 WEIGHTS_PATH = Path(__file__).parent / "runs/detect/grocery/weights/best.pt"
 
 # Global model reference set during lifespan startup
-_model: YOLO | None = None
+_model: Optional[YOLO] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _model
-    device = (
-        "mps" if torch.backends.mps.is_available()
-        else "cuda" if torch.cuda.is_available()
-        else "cpu"
-    )
-    if not WEIGHTS_PATH.exists():
-        raise RuntimeError(
-            f"Model weights not found at {WEIGHTS_PATH}. "
-            "Run `python train.py` first."
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if WEIGHTS_PATH.exists():
+        weights = str(WEIGHTS_PATH)
+        print(f"[server] Loading custom weights from {WEIGHTS_PATH}")
+    else:
+        weights = "yolov8n.pt"
+        print(
+            f"[server] Custom weights not found at {WEIGHTS_PATH}. "
+            "Falling back to base yolov8n.pt (COCO classes). "
+            "Run `python train.py` to use the grocery-trained model."
         )
-    _model = YOLO(str(WEIGHTS_PATH))
+    _model = YOLO(weights)
     _model.to(device)
     print(f"[server] Model loaded on {device.upper()}")
     yield

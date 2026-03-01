@@ -29,17 +29,11 @@ function classifyCategory(className: string): string {
   return CATEGORY_MAP[className.toLowerCase()] ?? "other";
 }
 
-function aggregatePredictions(
-  allPredictions: RoboflowPrediction[]
-): DetectedItem[] {
-  const grouped = new Map<
-    string,
-    { totalConfidence: number; count: number }
-  >();
+function aggregatePredictions(allPredictions: RoboflowPrediction[]): DetectedItem[] {
+  const grouped = new Map<string, { totalConfidence: number; count: number }>();
 
   for (const pred of allPredictions) {
     if (pred.confidence < CONFIDENCE_THRESHOLD) continue;
-
     const key = pred.class.toLowerCase();
     const existing = grouped.get(key);
     if (existing) {
@@ -50,19 +44,19 @@ function aggregatePredictions(
     }
   }
 
-  return Array.from(grouped.entries()).map(
-    ([name, { totalConfidence, count }]) => ({
-      name,
-      category: classifyCategory(name),
-      confidence: totalConfidence / count,
-      quantity: count,
-    })
-  );
+  return Array.from(grouped.entries()).map(([name, { totalConfidence, count }]) => ({
+    name,
+    category: classifyCategory(name),
+    confidence: totalConfidence / count,
+    quantity: count,
+  }));
 }
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
   const frames: string[] = body.frames;
+  const sessionId: string | undefined = body.session_id;
+  const seenItems: string[] = body.seen_items ?? [];
 
   if (!frames || !Array.isArray(frames) || frames.length === 0) {
     return new Response(
@@ -86,69 +80,72 @@ export async function POST(request: NextRequest) {
           const response = await detectLocal(frames[i]);
           const framePredictions = response.predictions;
           allPredictions.push(...framePredictions);
-
           const frameItems = aggregatePredictions(framePredictions);
           write({ type: "frame", frameIndex: i, items: frameItems });
         }
 
         const detectedItems = aggregatePredictions(allPredictions);
 
-        // Save to Supabase
         const supabase = createServerClient<Database>(
           process.env.NEXT_PUBLIC_SUPABASE_URL!,
           process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
           {
             cookies: {
-              getAll() {
-                return cookieStore.getAll();
-              },
+              getAll() { return cookieStore.getAll(); },
               setAll(cookiesToSet) {
                 try {
                   cookiesToSet.forEach(({ name, value, options }) =>
                     cookieStore.set(name, value, options)
                   );
-                } catch {
-                  // ignore in route handler
-                }
+                } catch { /* ignore in route handler */ }
               },
             },
           }
         );
 
         const now = new Date().toISOString();
-
-        await supabase
-          .from("fridge_items")
-          .update({ is_present: false })
-          .eq("is_present", true);
+        const seenSet = new Set(seenItems.map((s) => s.toLowerCase()));
 
         for (const item of detectedItems) {
-          const { data: existing } = await supabase
+          const baseQuery = supabase
             .from("fridge_items")
-            .select("id")
-            .ilike("name", item.name)
-            .maybeSingle();
+            .select("id, quantity")
+            .ilike("name", item.name);
 
-          if (existing) {
-            await supabase
-              .from("fridge_items")
-              .update({
+          const { data: existing } = await (sessionId
+            ? baseQuery.eq("session_id", sessionId).maybeSingle()
+            : baseQuery.maybeSingle());
+
+          const alreadySeen = seenSet.has(item.name.toLowerCase());
+
+          if (!alreadySeen) {
+            if (existing) {
+              await supabase
+                .from("fridge_items")
+                .update({
+                  is_present: true,
+                  quantity: existing.quantity + item.quantity,
+                  last_seen: now,
+                })
+                .eq("id", existing.id);
+            } else {
+              await supabase.from("fridge_items").insert({
+                name: item.name,
                 category: item.category,
                 quantity: item.quantity,
                 confidence: item.confidence,
                 is_present: true,
                 last_seen: now,
-              })
-              .eq("id", existing.id);
+                ...(sessionId ? { session_id: sessionId } : {}),
+              });
+            }
           } else {
-            await supabase.from("fridge_items").insert({
-              name: item.name,
-              category: item.category,
-              quantity: item.quantity,
-              confidence: item.confidence,
-              is_present: true,
-              last_seen: now,
-            });
+            if (existing) {
+              await supabase
+                .from("fridge_items")
+                .update({ is_present: true, last_seen: now })
+                .eq("id", existing.id);
+            }
           }
         }
 
@@ -156,6 +153,7 @@ export async function POST(request: NextRequest) {
           frame_count: frames.length,
           items_detected: detectedItems.length,
           raw_response: { predictions: allPredictions, items: detectedItems },
+          ...(sessionId ? { session_id: sessionId } : {}),
         });
 
         write({
@@ -165,9 +163,8 @@ export async function POST(request: NextRequest) {
           totalPredictions: allPredictions.length,
         });
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "Failed to process scan";
-        console.error("Scan error:", error);
+        const message = error instanceof Error ? error.message : "Failed to process scan";
+        console.error("Scan add error:", error);
         write({ type: "error", message });
       } finally {
         controller.close();

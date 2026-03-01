@@ -20,7 +20,7 @@ type CaptureState =
 
 const SESSION_KEY = "tastebuddy_session_id";
 
-export default function CapturePage() {
+export default function RemoveCapturePage() {
   const { videoRef, status: camStatus, error: camError, start, stop } = useCamera();
   const wakeLock = useWakeLock();
   const [state, setState] = useState<CaptureState>("IDLE");
@@ -45,9 +45,7 @@ export default function CapturePage() {
         localStorage.setItem(SESSION_KEY, id);
         setSessionId(id);
       })
-      .catch(() => {
-        /* leave sessionId null; error state will show */
-      });
+      .catch(() => {});
   }, []);
 
   const runScan = useCallback(async () => {
@@ -62,10 +60,9 @@ export default function CapturePage() {
 
     try {
       const frames = await extractFrames(video, 3);
-
       setState("UPLOADING");
 
-      const res = await fetch("/api/scan", {
+      const res = await fetch("/api/scan/remove", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ frames, session_id: sessionId }),
@@ -99,8 +96,9 @@ export default function CapturePage() {
               return Array.from(merged.values());
             });
           } else if (msg.type === "complete") {
-            setDetectedItems(msg.items as DetectedItem[]);
-            setLastResult(`Detected ${(msg.items as DetectedItem[]).length} items`);
+            const items = msg.items as DetectedItem[];
+            setDetectedItems(items);
+            setLastResult(`Removed ${items.length} item${items.length !== 1 ? "s" : ""}`);
             setState("DONE");
 
             setTimeout(() => {
@@ -123,7 +121,6 @@ export default function CapturePage() {
     }
   }, [videoRef, sessionId]);
 
-  // Keep a stable ref so the periodic interval always calls the latest runScan
   useEffect(() => {
     runScanRef.current = runScan;
   }, [runScan]);
@@ -176,7 +173,7 @@ export default function CapturePage() {
 
   const stateLabel: Record<CaptureState, string> = {
     IDLE: "Camera off",
-    MONITORING: "Monitoring brightness...",
+    MONITORING: "Monitoring — Removing Items",
     TRIGGERED: "Brightness spike detected!",
     CAPTURING: "Capturing frames...",
     UPLOADING: "Analyzing...",
@@ -186,11 +183,11 @@ export default function CapturePage() {
 
   const stateColor: Record<CaptureState, string> = {
     IDLE: "bg-zinc-500",
-    MONITORING: "bg-emerald-500",
+    MONITORING: "bg-orange-500",
     TRIGGERED: "bg-yellow-500",
-    CAPTURING: "bg-blue-500",
-    UPLOADING: "bg-blue-500",
-    DONE: "bg-emerald-500",
+    CAPTURING: "bg-orange-400",
+    UPLOADING: "bg-orange-400",
+    DONE: "bg-orange-500",
     ERROR: "bg-red-500",
   };
 
@@ -198,6 +195,13 @@ export default function CapturePage() {
 
   return (
     <main className="flex min-h-[calc(100vh-3.5rem)] flex-col bg-black">
+      {/* Mode label */}
+      <div className="absolute left-1/2 top-4 z-10 -translate-x-1/2">
+        <span className="rounded-full bg-orange-600/90 px-4 py-1 text-sm font-semibold text-white backdrop-blur-sm">
+          Removing Items
+        </span>
+      </div>
+
       {/* Video feed */}
       <div className="relative flex-1">
         <video
@@ -209,19 +213,16 @@ export default function CapturePage() {
         />
 
         {/* Status overlay */}
-        <div className="absolute left-4 top-4 flex flex-col gap-2">
+        <div className="absolute left-4 top-14 flex flex-col gap-2">
           <div className="flex items-center gap-2 rounded-lg bg-black/60 px-3 py-2 backdrop-blur-sm">
             <div
               className={cn(
                 "h-2.5 w-2.5 rounded-full",
                 stateColor[state],
-                (state === "MONITORING" || state === "UPLOADING") &&
-                  "animate-pulse"
+                (state === "MONITORING" || state === "UPLOADING") && "animate-pulse"
               )}
             />
-            <span className="text-sm font-medium text-white">
-              {stateLabel[state]}
-            </span>
+            <span className="text-sm font-medium text-white">{stateLabel[state]}</span>
           </div>
 
           {state === "MONITORING" && (
@@ -232,14 +233,12 @@ export default function CapturePage() {
                   <div
                     className={cn(
                       "h-full rounded-full transition-all",
-                      luminance >= 80 ? "bg-yellow-400" : "bg-emerald-400"
+                      luminance >= 80 ? "bg-yellow-400" : "bg-orange-400"
                     )}
                     style={{ width: `${Math.min((luminance / 255) * 100, 100)}%` }}
                   />
                 </div>
-                <span className="text-xs tabular-nums text-zinc-300">
-                  {luminance}/255
-                </span>
+                <span className="text-xs tabular-nums text-zinc-300">{luminance}/255</span>
               </div>
             </div>
           )}
@@ -261,7 +260,7 @@ export default function CapturePage() {
               {detectedItems.map((item) => (
                 <span
                   key={item.name}
-                  className="rounded-full bg-emerald-700/80 px-2.5 py-0.5 text-xs font-medium text-emerald-100"
+                  className="rounded-full bg-orange-700/80 px-2.5 py-0.5 text-xs font-medium text-orange-100"
                 >
                   {item.name} ({Math.round(item.confidence * 100)}%)
                 </span>
@@ -303,15 +302,11 @@ export default function CapturePage() {
           </Button>
           <Button
             onClick={() => runScan()}
-            disabled={
-              state === "CAPTURING" || state === "UPLOADING"
-            }
+            disabled={state === "CAPTURING" || state === "UPLOADING"}
             size="lg"
             className="flex-1"
           >
-            {state === "CAPTURING" || state === "UPLOADING"
-              ? "Scanning..."
-              : "Manual Scan"}
+            {state === "CAPTURING" || state === "UPLOADING" ? "Scanning..." : "Manual Scan"}
           </Button>
         </div>
       )}
