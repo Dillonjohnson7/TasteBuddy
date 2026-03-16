@@ -1,67 +1,25 @@
 import { NextRequest } from "next/server";
-import { detectItems as detectRoboflow } from "@/lib/roboflow/client";
 import { detectItems as detectLocal } from "@/lib/local-model/client";
 import type { RoboflowPrediction, DetectedItem } from "@/lib/roboflow/types";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import type { Database } from "@/lib/supabase/types";
 
-const detectItems =
-  process.env.USE_LOCAL_MODEL === "true" ? detectLocal : detectRoboflow;
-
 const CONFIDENCE_THRESHOLD = 0.4;
 
 const CATEGORY_MAP: Record<string, string> = {
-  // Dairy
   milk: "dairy",
   cheese: "dairy",
   butter: "dairy",
   yogurt: "dairy",
   eggs: "dairy",
-  "sour cream": "dairy",
-  // Produce
   lettuce: "produce",
   apple: "produce",
   tomato: "produce",
   carrot: "produce",
-  orange: "produce",
-  banana: "produce",
-  lemon: "produce",
-  lime: "produce",
-  mango: "produce",
-  melon: "produce",
-  watermelon: "produce",
-  pear: "produce",
-  pineapple: "produce",
-  plum: "produce",
-  grapefruit: "produce",
-  avocado: "produce",
-  peach: "produce",
-  kiwi: "produce",
-  papaya: "produce",
-  "passion fruit": "produce",
-  pomegranate: "produce",
-  asparagus: "produce",
-  aubergine: "produce",
-  cabbage: "produce",
-  cucumber: "produce",
-  garlic: "produce",
-  ginger: "produce",
-  leek: "produce",
-  mushroom: "produce",
-  onion: "produce",
-  potato: "produce",
-  "sweet potato": "produce",
-  "bell pepper": "produce",
-  beet: "produce",
-  zucchini: "produce",
-  // Beverages
   "orange juice": "beverage",
-  "apple juice": "beverage",
-  "grapefruit juice": "beverage",
   soda: "beverage",
   beer: "beverage",
-  // Condiments / other
   ketchup: "condiment",
   "leftover pizza": "leftover",
   "chicken breast": "meat",
@@ -125,7 +83,7 @@ export async function POST(request: NextRequest) {
 
       try {
         for (let i = 0; i < frames.length; i++) {
-          const response = await detectItems(frames[i]);
+          const response = await detectLocal(frames[i]);
           const framePredictions = response.predictions;
           allPredictions.push(...framePredictions);
 

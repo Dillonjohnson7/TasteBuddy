@@ -1,4 +1,4 @@
-path: /Users/akshay/Desktop/BeefytummyCodes/Whatsinmyfridge/project/yolo_dataset
+path: C:\HarvardStuff\CompvisionHack\TasteBuddy\model\yolo_dataset
 train: images/train
 val: images/val
 test: images/test

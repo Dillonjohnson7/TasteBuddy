@@ -18,7 +18,7 @@ from ultralytics import YOLO
 MODEL  = "yolov8n.pt"   # swap to "yolov8s.pt" for ~15% better accuracy
 IMGSZ  = 640
 EPOCHS = 50
-BATCH  = 16
+BATCH  = 32
 DATA   = Path(__file__).resolve().parent / "data.yaml"
 
 # ── Training ───────────────────────────────────────────────────────────────────
@@ -29,8 +29,16 @@ def main():
             "Run convert_dataset.py first."
         )
 
-    device = "0" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {'GPU (cuda:0)' if device == '0' else 'CPU'}")
+    if not torch.cuda.is_available():
+        print("\n" + "!"*60)
+        print("WARNING: CUDA is not available. Training will be VERY slow on CPU.")
+        print("To enable GPU training, please run:")
+        print("pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121")
+        print("!"*60 + "\n")
+        device = "cpu"
+    else:
+        device = "0"
+        print(f"Using device: GPU (cuda:0)")
 
     model = YOLO(MODEL)
     model.train(
